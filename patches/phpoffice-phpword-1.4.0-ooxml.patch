@@ -1,0 +1,1292 @@
+diff --git a/src/PhpWord/Writer/Word2007/Element/FormField.php b/src/PhpWord/Writer/Word2007/Element/FormField.php
+index c5d59a449..bcdca298f 100644
+--- a/src/PhpWord/Writer/Word2007/Element/FormField.php
++++ b/src/PhpWord/Writer/Word2007/Element/FormField.php
+@@ -113,7 +113,9 @@ class FormField extends Text
+         $default = $element->getDefault();
+ 
+         $xmlWriter->startElement('w:textInput');
+-        $xmlWriter->writeElementBlock('w:default', 'w:val', $default);
++        // w:default is optional, and the default of a text box is the empty
++        // string, so a text box without a default writes none
++        $xmlWriter->writeElementIf($default !== null, 'w:default', 'w:val', $default);
+         $xmlWriter->endElement();
+     }
+ 
+@@ -132,7 +134,8 @@ class FormField extends Text
+         $value = $value ? 1 : 0;
+ 
+         $xmlWriter->startElement('w:checkBox');
+-        $xmlWriter->writeElementBlock('w:sizeAuto', 'w:val', '');
++        // w:sizeAuto is a CT_OnOff; without a w:val it means true
++        $xmlWriter->writeElement('w:sizeAuto');
+         $xmlWriter->writeElementBlock('w:default', 'w:val', $default);
+         $xmlWriter->writeElementBlock('w:checked', 'w:val', $value);
+         $xmlWriter->endElement();
+@@ -153,8 +156,9 @@ class FormField extends Text
+         $entries = $element->getEntries();
+ 
+         $xmlWriter->startElement('w:ddList');
+-        $xmlWriter->writeElementBlock('w:result', 'w:val', $value);
+-        $xmlWriter->writeElementBlock('w:default', 'w:val', $default);
++        // w:result and w:default are optional; the w:val of their CT_DecimalNumber is required and is an integer
++        $xmlWriter->writeElementIf($value !== null, 'w:result', 'w:val', $value);
++        $xmlWriter->writeElementIf($default !== null, 'w:default', 'w:val', $default);
+         foreach ($entries as $entry) {
+             if ($entry == null || $entry == '') {
+                 $entry = str_repeat(' ', self::FILLER_LENGTH);
+diff --git a/src/PhpWord/Writer/Word2007/Element/ListItem.php b/src/PhpWord/Writer/Word2007/Element/ListItem.php
+index a91301cdc..89a6467a2 100644
+--- a/src/PhpWord/Writer/Word2007/Element/ListItem.php
++++ b/src/PhpWord/Writer/Word2007/Element/ListItem.php
+@@ -47,16 +47,21 @@ class ListItem extends AbstractElement
+         $xmlWriter->startElement('w:p');
+ 
+         $xmlWriter->startElement('w:pPr');
+-        $styleWriter->write();
+ 
+-        $xmlWriter->startElement('w:numPr');
+-        $xmlWriter->startElement('w:ilvl');
+-        $xmlWriter->writeAttribute('w:val', $element->getDepth());
+-        $xmlWriter->endElement(); // w:ilvl
+-        $xmlWriter->startElement('w:numId');
+-        $xmlWriter->writeAttribute('w:val', $element->getStyle()->getNumId());
+-        $xmlWriter->endElement(); // w:numId
+-        $xmlWriter->endElement(); // w:numPr
++        // The list item carries its own numbering. The paragraph style writer
++        // writes it where the schema names it, among the other properties.
++        $styleWriter->setChild('numPr', function () use ($xmlWriter, $element): void {
++            $xmlWriter->startElement('w:numPr');
++            $xmlWriter->startElement('w:ilvl');
++            $xmlWriter->writeAttribute('w:val', $element->getDepth());
++            $xmlWriter->endElement(); // w:ilvl
++            $xmlWriter->startElement('w:numId');
++            $xmlWriter->writeAttribute('w:val', $element->getStyle()->getNumId());
++            $xmlWriter->endElement(); // w:numId
++            $xmlWriter->endElement(); // w:numPr
++        });
++
++        $styleWriter->write();
+ 
+         $xmlWriter->endElement(); // w:pPr
+ 
+diff --git a/src/PhpWord/Writer/Word2007/Element/ListItemRun.php b/src/PhpWord/Writer/Word2007/Element/ListItemRun.php
+index a20912a0a..a54f2828a 100644
+--- a/src/PhpWord/Writer/Word2007/Element/ListItemRun.php
++++ b/src/PhpWord/Writer/Word2007/Element/ListItemRun.php
+@@ -19,6 +19,7 @@
+ namespace PhpOffice\PhpWord\Writer\Word2007\Element;
+ 
+ use PhpOffice\PhpWord\Element\ListItemRun as ListItemRunElement;
++use PhpOffice\PhpWord\Shared\XMLWriter;
+ use PhpOffice\PhpWord\Writer\Word2007\Style\Paragraph as ParagraphStyleWriter;
+ 
+ /**
+@@ -63,16 +64,20 @@ class ListItemRun extends AbstractElement
+         $styleWriter = new ParagraphStyleWriter($xmlWriter, $element->getParagraphStyle());
+         $styleWriter->setIsInline(true);
+         $styleWriter->setWithoutPPR(true);
+-        $styleWriter->write();
+ 
+-        $this->writeParagraphPropertiesNumbering($element);
++        // The list item carries its own numbering. The paragraph style writer
++        // writes it where the schema names it, among the other properties.
++        $styleWriter->setChild('numPr', function () use ($xmlWriter, $element): void {
++            $this->writeParagraphPropertiesNumbering($xmlWriter, $element);
++        });
++
++        $styleWriter->write();
+ 
+         $xmlWriter->endElement(); // w:pPr
+     }
+ 
+-    private function writeParagraphPropertiesNumbering(ListItemRunElement $element): void
++    private function writeParagraphPropertiesNumbering(XMLWriter $xmlWriter, ListItemRunElement $element): void
+     {
+-        $xmlWriter = $this->getXmlWriter();
+         $xmlWriter->startElement('w:numPr');
+ 
+         $xmlWriter->writeElementBlock('w:ilvl', [
+diff --git a/src/PhpWord/Writer/Word2007/Element/TOC.php b/src/PhpWord/Writer/Word2007/Element/TOC.php
+index 44c6ba11f..6b31e2692 100644
+--- a/src/PhpWord/Writer/Word2007/Element/TOC.php
++++ b/src/PhpWord/Writer/Word2007/Element/TOC.php
+@@ -22,6 +22,7 @@ use PhpOffice\PhpWord\Element\Title;
+ use PhpOffice\PhpWord\Element\TOC as TOCElement;
+ use PhpOffice\PhpWord\Shared\XMLWriter;
+ use PhpOffice\PhpWord\Style\Font;
++use PhpOffice\PhpWord\Style\Paragraph as ParagraphStyle;
+ use PhpOffice\PhpWord\Writer\Word2007\Style\Font as FontStyleWriter;
+ use PhpOffice\PhpWord\Writer\Word2007\Style\Paragraph as ParagraphStyleWriter;
+ use PhpOffice\PhpWord\Writer\Word2007\Style\Tab as TabStyleWriter;
+@@ -152,12 +153,38 @@ class TOC extends AbstractElement
+         $fontStyle = $element->getStyleFont();
+         $isObject = ($fontStyle instanceof Font) ? true : false;
+ 
++        // The tab stop and the indent of the entry, written where the schema names
++        // them, among the other properties of the paragraph.
++        $writeTabs = function () use ($xmlWriter, $tocStyle): void {
++            $xmlWriter->startElement('w:tabs');
++            $styleWriter = new TabStyleWriter($xmlWriter, $tocStyle);
++            $styleWriter->write();
++            $xmlWriter->endElement();
++        };
++        $writeIndent = function () use ($xmlWriter, $indent): void {
++            if ($indent > 0) {
++                $xmlWriter->startElement('w:ind');
++                $xmlWriter->writeAttribute('w:left', $indent);
++                $xmlWriter->endElement();
++            }
++        };
++
+         $xmlWriter->startElement('w:pPr');
+ 
+         // Paragraph
+-        if ($isObject && null !== $fontStyle->getParagraph()) {
+-            $styleWriter = new ParagraphStyleWriter($xmlWriter, $fontStyle->getParagraph());
++        $paragraph = $isObject ? $fontStyle->getParagraph() : null;
++        if ($paragraph instanceof ParagraphStyle) {
++            $styleWriter = new ParagraphStyleWriter($xmlWriter, $paragraph);
++            $styleWriter->setWithoutPPR(true);
++            $styleWriter->setChild('tabs', $writeTabs);
++            $styleWriter->setChild('ind', $writeIndent);
+             $styleWriter->write();
++        } else {
++            // A paragraph style that is named rather than carried brings no
++            // properties of its own, so the entry writes the tab stop and the
++            // indent itself.
++            $writeTabs();
++            $writeIndent();
+         }
+ 
+         // Font
+@@ -169,19 +196,6 @@ class TOC extends AbstractElement
+             $xmlWriter->endElement(); // w:rPr
+         }
+ 
+-        // Tab
+-        $xmlWriter->startElement('w:tabs');
+-        $styleWriter = new TabStyleWriter($xmlWriter, $tocStyle);
+-        $styleWriter->write();
+-        $xmlWriter->endElement();
+-
+-        // Indent
+-        if ($indent > 0) {
+-            $xmlWriter->startElement('w:ind');
+-            $xmlWriter->writeAttribute('w:left', $indent);
+-            $xmlWriter->endElement();
+-        }
+-
+         $xmlWriter->endElement(); // w:pPr
+     }
+ 
+diff --git a/src/PhpWord/Writer/Word2007/Element/Table.php b/src/PhpWord/Writer/Word2007/Element/Table.php
+index 2bb1b3f3a..149daeda9 100644
+--- a/src/PhpWord/Writer/Word2007/Element/Table.php
++++ b/src/PhpWord/Writer/Word2007/Element/Table.php
+@@ -52,14 +52,15 @@ class Table extends AbstractElement
+         if ($rowCount > 0) {
+             $xmlWriter->startElement('w:tbl');
+ 
+-            // Write columns
+-            $this->writeColumns($xmlWriter, $element);
+-
+             // Write style
+             $styleWriter = new TableStyleWriter($xmlWriter, $element->getStyle());
+             $styleWriter->setWidth($element->getWidth());
++            $styleWriter->setIsInline(true);
+             $styleWriter->write();
+ 
++            // Write columns
++            $this->writeColumns($xmlWriter, $element);
++
+             // Write rows
+             for ($i = 0; $i < $rowCount; ++$i) {
+                 $this->writeRow($xmlWriter, $rows[$i]);
+@@ -81,7 +82,6 @@ class Table extends AbstractElement
+             $xmlWriter->startElement('w:gridCol');
+             if ($width !== null) {
+                 $xmlWriter->writeAttribute('w:w', $width);
+-                $xmlWriter->writeAttribute('w:type', 'dxa');
+             }
+             $xmlWriter->endElement();
+         }
+diff --git a/src/PhpWord/Writer/Word2007/Element/TextBreak.php b/src/PhpWord/Writer/Word2007/Element/TextBreak.php
+index 4c2ecde7e..c0b973aa4 100644
+--- a/src/PhpWord/Writer/Word2007/Element/TextBreak.php
++++ b/src/PhpWord/Writer/Word2007/Element/TextBreak.php
+@@ -18,6 +18,8 @@
+ 
+ namespace PhpOffice\PhpWord\Writer\Word2007\Element;
+ 
++use PhpOffice\PhpWord\Writer\Word2007\Style\Paragraph as ParagraphStyleWriter;
++
+ /**
+  * TextBreak element writer.
+  *
+@@ -37,18 +39,44 @@ class TextBreak extends Text
+         }
+ 
+         if (!$this->withoutP) {
+-            $hasStyle = $element->hasStyle();
+             $this->startElementP();
+ 
+-            if ($hasStyle) {
+-                $xmlWriter->startElement('w:pPr');
+-                $this->writeFontStyle();
+-                $xmlWriter->endElement(); // w:pPr
+-            }
+-
+             $this->endElementP(); // w:p
+         } else {
++            // w:br is a run-level element; w:p only takes runs, hyperlinks and the like
++            $xmlWriter->startElement('w:r');
+             $xmlWriter->writeElement('w:br');
++            $xmlWriter->endElement(); // w:r
++        }
++    }
++
++    /**
++     * Write the properties of the paragraph.
++     *
++     * `CT_P` takes one `w:pPr`, and the run properties of the paragraph mark belong
++     * in it: `CT_PPr` names `w:rPr` after the children of `CT_PPrBase`, so they come
++     * after the properties of the paragraph.
++     */
++    protected function writeParagraphStyle(): void
++    {
++        $xmlWriter = $this->getXmlWriter();
++        $element = $this->getElement();
++        if (!$element instanceof \PhpOffice\PhpWord\Element\TextBreak) {
++            return;
++        }
++        if (!$element->hasStyle()) {
++            return;
+         }
++
++        $xmlWriter->startElement('w:pPr');
++
++        $styleWriter = new ParagraphStyleWriter($xmlWriter, $element->getParagraphStyle());
++        $styleWriter->setIsInline(true);
++        $styleWriter->setWithoutPPR(true);
++        $styleWriter->write();
++
++        $this->writeFontStyle();
++
++        $xmlWriter->endElement(); // w:pPr
+     }
+ }
+diff --git a/src/PhpWord/Writer/Word2007/Part/Document.php b/src/PhpWord/Writer/Word2007/Part/Document.php
+index 9a2ec09ef..8ee1e8a4b 100644
+--- a/src/PhpWord/Writer/Word2007/Part/Document.php
++++ b/src/PhpWord/Writer/Word2007/Part/Document.php
+@@ -92,12 +92,16 @@ class Document extends AbstractPart
+ 
+     /**
+      * Write end section.
++     *
++     * The children of w:sectPr are a sequence in the schema and are only
++     * accepted in the order the schema names them: the header and footer
++     * references first, then the footnote properties of the section, then
++     * the properties of the style, then w:titlePg.
+      */
+     private function writeSectionSettings(XMLWriter $xmlWriter, Section $section): void
+     {
+         $xmlWriter->startElement('w:sectPr');
+ 
+-        // Header reference
+         foreach ($section->getHeaders() as $header) {
+             $rId = $header->getRelationId();
+             $xmlWriter->startElement('w:headerReference');
+@@ -106,7 +110,6 @@ class Document extends AbstractPart
+             $xmlWriter->endElement();
+         }
+ 
+-        // Footer reference
+         foreach ($section->getFooters() as $footer) {
+             $rId = $footer->getRelationId();
+             $xmlWriter->startElement('w:footerReference');
+@@ -115,13 +118,6 @@ class Document extends AbstractPart
+             $xmlWriter->endElement();
+         }
+ 
+-        // Different first page
+-        if ($section->hasDifferentFirstPage()) {
+-            $xmlWriter->startElement('w:titlePg');
+-            $xmlWriter->endElement();
+-        }
+-
+-        // Footnote properties
+         if ($section->getFootnoteProperties() !== null) {
+             $xmlWriter->startElement('w:footnotePr');
+             if ($section->getFootnoteProperties()->getPos() != null) {
+@@ -147,10 +143,14 @@ class Document extends AbstractPart
+             $xmlWriter->endElement();
+         }
+ 
+-        // Section settings
+         $styleWriter = new SectionStyleWriter($xmlWriter, $section->getStyle());
+         $styleWriter->write();
+ 
++        if ($section->hasDifferentFirstPage()) {
++            $xmlWriter->startElement('w:titlePg');
++            $xmlWriter->endElement();
++        }
++
+         $xmlWriter->endElement(); // w:sectPr
+     }
+ }
+diff --git a/src/PhpWord/Writer/Word2007/Part/Numbering.php b/src/PhpWord/Writer/Word2007/Part/Numbering.php
+index ca29cd01d..545c62546 100644
+--- a/src/PhpWord/Writer/Word2007/Part/Numbering.php
++++ b/src/PhpWord/Writer/Word2007/Part/Numbering.php
+@@ -145,12 +145,18 @@ class Numbering extends AbstractPart
+ 
+         $xmlWriter->startElement('w:pPr');
+ 
+-        $xmlWriter->startElement('w:tabs');
+-        $xmlWriter->startElement('w:tab');
+-        $xmlWriter->writeAttribute('w:val', 'num');
+-        $xmlWriter->writeAttributeIf($tabPos !== null, 'w:pos', $tabPos);
+-        $xmlWriter->endElement(); // w:tab
+-        $xmlWriter->endElement(); // w:tabs
++        // `w:tab` requires a position. The tab stop of a level is where the text
++        // of the level begins, which is the left indent of the level; the number
++        // hangs into it.
++        $pos = $tabPos ?? $left;
++        if ($pos !== null) {
++            $xmlWriter->startElement('w:tabs');
++            $xmlWriter->startElement('w:tab');
++            $xmlWriter->writeAttribute('w:val', 'num');
++            $xmlWriter->writeAttribute('w:pos', $pos);
++            $xmlWriter->endElement(); // w:tab
++            $xmlWriter->endElement(); // w:tabs
++        }
+ 
+         $xmlWriter->startElement('w:ind');
+         $xmlWriter->writeAttributeIf($left !== null, 'w:left', $left);
+diff --git a/src/PhpWord/Writer/Word2007/Part/Settings.php b/src/PhpWord/Writer/Word2007/Part/Settings.php
+index cd7beb4e7..f1d3ffb09 100644
+--- a/src/PhpWord/Writer/Word2007/Part/Settings.php
++++ b/src/PhpWord/Writer/Word2007/Part/Settings.php
+@@ -58,7 +58,7 @@ class Settings extends AbstractPart
+         $xmlWriter->writeAttribute('xmlns:v', 'urn:schemas-microsoft-com:vml');
+         $xmlWriter->writeAttribute('xmlns:w10', 'urn:schemas-microsoft-com:office:word');
+ 
+-        foreach ($this->settings as $settingKey => $settingValue) {
++        foreach ($this->orderedSettings() as $settingKey => $settingValue) {
+             $this->writeSetting($xmlWriter, $settingKey, $settingValue);
+         }
+ 
+@@ -95,6 +95,72 @@ class Settings extends AbstractPart
+         }
+     }
+ 
++    /**
++     * The order the schema names the settings this library writes in.
++     *
++     * `CT_Settings` is a sequence and not a set, so a reader that walks it stops at the
++     * first child it did not expect. The settings are gathered in two places — a literal
++     * for the ones that always carry a value, and a call for each of the on/off ones —
++     * and the two do not agree on an order, so the order is applied where the settings
++     * are written rather than at either of the two places that gather them.
++     *
++     * @var list<string>
++     */
++    private const ORDER = [
++        'w:zoom',
++        'w:mirrorMargins',
++        'w:hideSpellingErrors',
++        'w:hideGrammaticalErrors',
++        'w:proofState',
++        'w:revisionView',
++        'w:trackRevisions',
++        'w:doNotTrackMoves',
++        'w:doNotTrackFormatting',
++        'w:documentProtection',
++        'w:defaultTabStop',
++        'w:autoHyphenation',
++        'w:consecutiveHyphenLimit',
++        'w:hyphenationZone',
++        'w:doNotHyphenateCaps',
++        'w:evenAndOddHeaders',
++        'w:bookFoldPrinting',
++        'w:characterSpacingControl',
++        'w:updateFields',
++        'w:compat',
++        'm:mathPr',
++        'w:themeFontLang',
++        'w:clrSchemeMapping',
++        'w:decimalSymbol',
++        'w:listSeparator',
++    ];
++
++    /**
++     * The settings, in the order the schema names them in.
++     *
++     * A setting the order does not name is written after the ones that are named, rather
++     * than dropped.
++     *
++     * @return array<string, mixed>
++     */
++    private function orderedSettings(): array
++    {
++        $ordered = [];
++
++        foreach (self::ORDER as $name) {
++            if (array_key_exists($name, $this->settings)) {
++                $ordered[$name] = $this->settings[$name];
++            }
++        }
++
++        foreach ($this->settings as $name => $value) {
++            if (!array_key_exists($name, $ordered)) {
++                $ordered[$name] = $value;
++            }
++        }
++
++        return $ordered;
++    }
++
+     /**
+      * Get settings.
+      */
+@@ -108,8 +174,6 @@ class Settings extends AbstractPart
+             'w:defaultTabStop' => ['@attributes' => ['w:val' => '708']],
+             'w:hyphenationZone' => ['@attributes' => ['w:val' => '425']],
+             'w:characterSpacingControl' => ['@attributes' => ['w:val' => 'doNotCompress']],
+-            'w:decimalSymbol' => ['@attributes' => ['w:val' => $documentSettings->getDecimalSymbol()]],
+-            'w:listSeparator' => ['@attributes' => ['w:val' => ';']],
+             'w:compat' => [],
+             'm:mathPr' => [
+                 'm:mathFont' => ['@attributes' => ['m:val' => 'Cambria Math']],
+@@ -140,6 +204,8 @@ class Settings extends AbstractPart
+                     'w:followedHyperlink' => 'followedHyperlink',
+                 ],
+             ],
++            'w:decimalSymbol' => ['@attributes' => ['w:val' => $documentSettings->getDecimalSymbol()]],
++            'w:listSeparator' => ['@attributes' => ['w:val' => ';']],
+         ];
+ 
+         $this->setOnOffValue('w:mirrorMargins', $documentSettings->hasMirrorMargins());
+diff --git a/src/PhpWord/Writer/Word2007/Part/Styles.php b/src/PhpWord/Writer/Word2007/Part/Styles.php
+index edf0314cc..1b7eac77b 100644
+--- a/src/PhpWord/Writer/Word2007/Part/Styles.php
++++ b/src/PhpWord/Writer/Word2007/Part/Styles.php
+@@ -182,6 +182,7 @@ class Styles extends AbstractPart
+         $xmlWriter->writeAttribute('w:type', $type);
+ 
+         // Heading style
++        $styleLink = null;
+         if ($styleType == 'title') {
+             $arrStyle = explode('_', $styleName);
+             if (count($arrStyle) > 1) {
+@@ -194,10 +195,6 @@ class Styles extends AbstractPart
+                 $styleLink = $styleName . 'Char';
+             }
+             $xmlWriter->writeAttribute('w:styleId', $styleId);
+-
+-            $xmlWriter->startElement('w:link');
+-            $xmlWriter->writeAttribute('w:val', $styleLink);
+-            $xmlWriter->endElement();
+         } elseif (null !== $paragraphStyle) {
+             // if type is 'paragraph' it should have a styleId
+             $xmlWriter->writeAttribute('w:styleId', $styleName);
+@@ -217,6 +214,14 @@ class Styles extends AbstractPart
+             }
+         }
+ 
++        // Linked style. CT_Style is a sequence and names w:link after w:next,
++        // so the link is written after the name and the parent style.
++        if (null !== $styleLink) {
++            $xmlWriter->startElement('w:link');
++            $xmlWriter->writeAttribute('w:val', $styleLink);
++            $xmlWriter->endElement();
++        }
++
+         // w:pPr
+         if (null !== $paragraphStyle) {
+             $styleWriter = new ParagraphStyleWriter($xmlWriter, $paragraphStyle);
+diff --git a/src/PhpWord/Writer/Word2007/Style/Fill.php b/src/PhpWord/Writer/Word2007/Style/Fill.php
+index 8e21abe39..f945e7000 100644
+--- a/src/PhpWord/Writer/Word2007/Style/Fill.php
++++ b/src/PhpWord/Writer/Word2007/Style/Fill.php
+@@ -36,7 +36,8 @@ class Fill extends AbstractStyle
+         }
+         $xmlWriter = $this->getXmlWriter();
+ 
+-        $xmlWriter->writeAttribute('on', 't');
++        // A shape declares filled and fillcolor; on belongs to v:stroke, v:shadow and o:extrusion
++        $xmlWriter->writeAttribute('filled', 't');
+         $xmlWriter->writeAttributeIf($style->getColor() !== null, 'fillcolor', $style->getColor());
+     }
+ }
+diff --git a/src/PhpWord/Writer/Word2007/Style/Font.php b/src/PhpWord/Writer/Word2007/Style/Font.php
+index 623e8d5e7..a18254c5f 100644
+--- a/src/PhpWord/Writer/Word2007/Style/Font.php
++++ b/src/PhpWord/Writer/Word2007/Style/Font.php
+@@ -69,6 +69,13 @@ class Font extends AbstractStyle
+ 
+         $xmlWriter->startElement('w:rPr');
+ 
++        // The children of `w:rPr` come in the order the schema names them. `CT_RPr` is a
++        // sequence and not a set, so a reader that walks it stops at the first child it
++        // did not expect, and a run whose properties are written in any other order is a
++        // run such a reader cannot read.
++        //
++        // The order below is the one in ECMA-376, in `EG_RPrBase`.
++
+         // Style name
+         if ($this->isInline === true) {
+             $styleName = $style->getStyleName();
+@@ -88,63 +95,48 @@ class Font extends AbstractStyle
+             $xmlWriter->endElement();
+         }
+ 
+-        //Language
+-        $language = $style->getLang();
+-        if ($language != null && ($language->getLatin() !== null || $language->getEastAsia() !== null || $language->getBidirectional() !== null)) {
+-            $xmlWriter->startElement('w:lang');
+-            $xmlWriter->writeAttributeIf($language->getLatin() !== null, 'w:val', $language->getLatin());
+-            $xmlWriter->writeAttributeIf($language->getEastAsia() !== null, 'w:eastAsia', $language->getEastAsia());
+-            $xmlWriter->writeAttributeIf($language->getBidirectional() !== null, 'w:bidi', $language->getBidirectional());
+-            //if bidi is not set but we are writing RTL, write the latin language in the bidi tag
+-            if ($style->isRTL() && $language->getBidirectional() === null && $language->getLatin() !== null) {
+-                $xmlWriter->writeAttribute('w:bidi', $language->getLatin());
+-            }
+-            $xmlWriter->endElement();
+-        }
+-
+-        // Color
+-        $color = $style->getColor();
+-        $xmlWriter->writeElementIf($color !== null, 'w:color', 'w:val', $color);
+-
+-        // Size
+-        $size = $style->getSize();
+-        $xmlWriter->writeElementIf($size !== null, 'w:sz', 'w:val', $size * 2);
+-        $xmlWriter->writeElementIf($size !== null, 'w:szCs', 'w:val', $size * 2);
+-
+         // Bold, italic
+         $xmlWriter->writeElementIf($style->isBold() !== null, 'w:b', 'w:val', $this->writeOnOf($style->isBold()));
+         $xmlWriter->writeElementIf($style->isBold() !== null, 'w:bCs', 'w:val', $this->writeOnOf($style->isBold()));
+         $xmlWriter->writeElementIf($style->isItalic() !== null, 'w:i', 'w:val', $this->writeOnOf($style->isItalic()));
+         $xmlWriter->writeElementIf($style->isItalic() !== null, 'w:iCs', 'w:val', $this->writeOnOf($style->isItalic()));
+ 
++        // All caps, small caps
++        $xmlWriter->writeElementIf($style->isAllCaps() !== null, 'w:caps', 'w:val', $this->writeOnOf($style->isAllCaps()));
++        $xmlWriter->writeElementIf($style->isSmallCaps() !== null, 'w:smallCaps', 'w:val', $this->writeOnOf($style->isSmallCaps()));
++
+         // Strikethrough, double strikethrough
+         $xmlWriter->writeElementIf($style->isStrikethrough(), 'w:strike', 'w:val', $this->writeOnOf($style->isStrikethrough()));
+         $xmlWriter->writeElementIf($style->isDoubleStrikethrough(), 'w:dstrike', 'w:val', $this->writeOnOf($style->isDoubleStrikethrough()));
+ 
+-        // Small caps, all caps
+-        $xmlWriter->writeElementIf($style->isSmallCaps() !== null, 'w:smallCaps', 'w:val', $this->writeOnOf($style->isSmallCaps()));
+-        $xmlWriter->writeElementIf($style->isAllCaps() !== null, 'w:caps', 'w:val', $this->writeOnOf($style->isAllCaps()));
++        // noProof
++        $xmlWriter->writeElementIf($style->isNoProof() !== null, 'w:noProof', 'w:val', $this->writeOnOf($style->isNoProof()));
+ 
+         //Hidden text
+         $xmlWriter->writeElementIf($style->isHidden(), 'w:vanish', 'w:val', $this->writeOnOf($style->isHidden()));
+ 
+-        // Underline
+-        $xmlWriter->writeElementIf($style->getUnderline() != 'none', 'w:u', 'w:val', $style->getUnderline());
+-
+-        // Foreground-Color
+-        $xmlWriter->writeElementIf($style->getFgColor() !== null, 'w:highlight', 'w:val', $style->getFgColor());
+-
+-        // Superscript/subscript
+-        $xmlWriter->writeElementIf($style->isSuperScript(), 'w:vertAlign', 'w:val', 'superscript');
+-        $xmlWriter->writeElementIf($style->isSubScript(), 'w:vertAlign', 'w:val', 'subscript');
++        // Color
++        $color = $style->getColor();
++        $xmlWriter->writeElementIf($color !== null, 'w:color', 'w:val', $color);
+ 
+         // Spacing
+-        $xmlWriter->writeElementIf($style->getScale() !== null, 'w:w', 'w:val', $style->getScale());
+         $xmlWriter->writeElementIf($style->getSpacing() !== null, 'w:spacing', 'w:val', $style->getSpacing());
++        $xmlWriter->writeElementIf($style->getScale() !== null, 'w:w', 'w:val', $style->getScale());
+         $xmlWriter->writeElementIf($style->getKerning() !== null, 'w:kern', 'w:val', $style->getKerning() * 2);
+ 
+-        // noProof
+-        $xmlWriter->writeElementIf($style->isNoProof() !== null, 'w:noProof', 'w:val', $this->writeOnOf($style->isNoProof()));
++        // Position
++        $xmlWriter->writeElementIf($style->getPosition() !== null, 'w:position', 'w:val', $style->getPosition());
++
++        // Size
++        $size = $style->getSize();
++        $xmlWriter->writeElementIf($size !== null, 'w:sz', 'w:val', $size * 2);
++        $xmlWriter->writeElementIf($size !== null, 'w:szCs', 'w:val', $size * 2);
++
++        // Foreground-Color
++        $xmlWriter->writeElementIf($style->getFgColor() !== null, 'w:highlight', 'w:val', $style->getFgColor());
++
++        // Underline
++        $xmlWriter->writeElementIf($style->getUnderline() != 'none', 'w:u', 'w:val', $style->getUnderline());
+ 
+         // Background-Color
+         $shading = $style->getShading();
+@@ -153,14 +145,29 @@ class Font extends AbstractStyle
+             $styleWriter->write();
+         }
+ 
++        // Superscript/subscript
++        $xmlWriter->writeElementIf($style->isSuperScript(), 'w:vertAlign', 'w:val', 'superscript');
++        $xmlWriter->writeElementIf($style->isSubScript(), 'w:vertAlign', 'w:val', 'subscript');
++
+         // RTL
+         if ($this->isInline === true) {
+             $styleName = $style->getStyleName();
+             $xmlWriter->writeElementIf($styleName === null && $style->isRTL(), 'w:rtl');
+         }
+ 
+-        // Position
+-        $xmlWriter->writeElementIf($style->getPosition() !== null, 'w:position', 'w:val', $style->getPosition());
++        //Language
++        $language = $style->getLang();
++        if ($language != null && ($language->getLatin() !== null || $language->getEastAsia() !== null || $language->getBidirectional() !== null)) {
++            $xmlWriter->startElement('w:lang');
++            $xmlWriter->writeAttributeIf($language->getLatin() !== null, 'w:val', $language->getLatin());
++            $xmlWriter->writeAttributeIf($language->getEastAsia() !== null, 'w:eastAsia', $language->getEastAsia());
++            $xmlWriter->writeAttributeIf($language->getBidirectional() !== null, 'w:bidi', $language->getBidirectional());
++            //if bidi is not set but we are writing RTL, write the latin language in the bidi tag
++            if ($style->isRTL() && $language->getBidirectional() === null && $language->getLatin() !== null) {
++                $xmlWriter->writeAttribute('w:bidi', $language->getLatin());
++            }
++            $xmlWriter->endElement();
++        }
+ 
+         $xmlWriter->endElement();
+     }
+diff --git a/src/PhpWord/Writer/Word2007/Style/Frame.php b/src/PhpWord/Writer/Word2007/Style/Frame.php
+index a7aab43e6..0077ef991 100644
+--- a/src/PhpWord/Writer/Word2007/Style/Frame.php
++++ b/src/PhpWord/Writer/Word2007/Style/Frame.php
+@@ -75,6 +75,11 @@ class Frame extends AbstractStyle
+             $wrap = null;
+         }
+ 
++        // An inline shape is in line with the text; only a floating shape is wrapped by it
++        if ($wrap === FrameStyle::WRAP_INLINE) {
++            $wrap = null;
++        }
++
+         // Style attribute
+         $xmlWriter->writeAttribute('style', $this->assembleStyle($styles));
+ 
+diff --git a/src/PhpWord/Writer/Word2007/Style/MarginBorder.php b/src/PhpWord/Writer/Word2007/Style/MarginBorder.php
+index b464e66ff..9e8c5790a 100644
+--- a/src/PhpWord/Writer/Word2007/Style/MarginBorder.php
++++ b/src/PhpWord/Writer/Word2007/Style/MarginBorder.php
+@@ -62,16 +62,25 @@ class MarginBorder extends AbstractStyle
+     {
+         $xmlWriter = $this->getXmlWriter();
+ 
+-        $sides = ['top', 'left', 'right', 'bottom', 'insideH', 'insideV'];
++        // The sides come in the order the schema names them, and `w:bottom` comes
++        // before `w:right`. The sizes, the colors and the styles come in the order
++        // the style keeps them in, which is top, left, right, bottom, so each side
++        // names the place it has in them.
++        $sides = [
++            'top' => 0,
++            'left' => 1,
++            'bottom' => 3,
++            'right' => 2,
++            'insideH' => 4,
++            'insideV' => 5,
++        ];
+ 
+-        foreach ($this->sizes as $i => $size) {
++        foreach ($sides as $side => $index) {
++            $size = $this->sizes[$index] ?? null;
+             if ($size !== null) {
+-                $color = null;
+-                if (isset($this->colors[$i])) {
+-                    $color = $this->colors[$i];
+-                }
+-                $style = $this->styles[$i] ?? 'single';
+-                $this->writeSide($xmlWriter, $sides[$i], $this->sizes[$i], $color, $style);
++                $color = $this->colors[$index] ?? null;
++                $style = $this->styles[$index] ?? 'single';
++                $this->writeSide($xmlWriter, $side, $size, $color, $style);
+             }
+         }
+     }
+diff --git a/src/PhpWord/Writer/Word2007/Style/Paragraph.php b/src/PhpWord/Writer/Word2007/Style/Paragraph.php
+index 55f51a54d..6a88cba6c 100644
+--- a/src/PhpWord/Writer/Word2007/Style/Paragraph.php
++++ b/src/PhpWord/Writer/Word2007/Style/Paragraph.php
+@@ -18,6 +18,7 @@
+ 
+ namespace PhpOffice\PhpWord\Writer\Word2007\Style;
+ 
++use InvalidArgumentException;
+ use PhpOffice\PhpWord\Shared\XMLWriter;
+ use PhpOffice\PhpWord\Style;
+ use PhpOffice\PhpWord\Style\Paragraph as ParagraphStyle;
+@@ -30,6 +31,16 @@ use PhpOffice\PhpWord\Writer\Word2007\Element\ParagraphAlignment;
+  */
+ class Paragraph extends AbstractStyle
+ {
++    /**
++     * The children of w:pPr that a caller may hand over to this writer.
++     *
++     * They are the children that a writer other than this one knows how to write,
++     * and the only ones a caller has a reason to write itself.
++     *
++     * @var string[]
++     */
++    private const HANDED_OVER_CHILDREN = ['numPr', 'tabs', 'ind'];
++
+     /**
+      * Without w:pPr.
+      *
+@@ -44,6 +55,20 @@ class Paragraph extends AbstractStyle
+      */
+     private $isInline = false;
+ 
++    /**
++     * Outline level of a heading style, written as w:outlineLvl.
++     *
++     * @var null|int
++     */
++    private $outlineLevel;
++
++    /**
++     * A child of w:pPr written in place of the one in the style.
++     *
++     * @var array<string, callable>
++     */
++    private $children = [];
++
+     /**
+      * Write style.
+      */
+@@ -59,6 +84,13 @@ class Paragraph extends AbstractStyle
+             $xmlWriter->startElement('w:pStyle');
+             $xmlWriter->writeAttribute('w:val', $this->style);
+             $xmlWriter->endElement();
++
++            // The properties a caller has taken over come after the name of the
++            // style, which is where the schema names them.
++            $this->writeNumbering($xmlWriter);
++            $this->writeTabs($xmlWriter);
++            $this->writeIndentation($xmlWriter);
++
+             if (!$this->withoutPPR) {
+                 $xmlWriter->endElement();
+             }
+@@ -83,62 +115,82 @@ class Paragraph extends AbstractStyle
+             $xmlWriter->startElement('w:pPr');
+         }
+ 
++        // The children of `w:pPr` come in the order the schema names them. The schema
++        // names them in a sequence and not in a set, so a reader that walks the
++        // sequence stops at the first child it did not expect: `w:keepNext` belongs
++        // before `w:widowControl`, `w:numPr` belongs before `w:pBdr`, `w:tabs`
++        // belongs before `w:spacing`, and `w:jc` belongs after `w:ind`. A paragraph
++        // whose properties are written in any other order is a paragraph such a
++        // reader cannot read.
++        //
++        // The order below is the one in ECMA-376, in `CT_PPrBase`.
++
+         // Style name
+         if ($this->isInline === true) {
+             $xmlWriter->writeElementIf($styles['name'] !== null, 'w:pStyle', 'w:val', $styles['name']);
+         }
+ 
+         // Pagination
+-        $xmlWriter->writeElementIf($styles['pagination']['widowControl'] === false, 'w:widowControl', 'w:val', '0');
+         $xmlWriter->writeElementIf($styles['pagination']['keepNext'] === true, 'w:keepNext', 'w:val', '1');
+         $xmlWriter->writeElementIf($styles['pagination']['keepLines'] === true, 'w:keepLines', 'w:val', '1');
+         $xmlWriter->writeElementIf($styles['pagination']['pageBreak'] === true, 'w:pageBreakBefore', 'w:val', '1');
++        $xmlWriter->writeElementIf($styles['pagination']['widowControl'] === false, 'w:widowControl', 'w:val', '0');
++
++        // Numbering
++        $outlineLevel = $this->writeNumbering($xmlWriter, $styles['numbering']);
++
++        // Border
++        if ($style->hasBorder()) {
++            $xmlWriter->startElement('w:pBdr');
++
++            $styleWriter = new MarginBorder($xmlWriter);
++            $styleWriter->setSizes($style->getBorderSize());
++            $styleWriter->setStyles($style->getBorderStyle());
++            $styleWriter->setColors($style->getBorderColor());
++            $styleWriter->write();
+ 
+-        // Paragraph alignment
+-        if ('' !== $styles['alignment']) {
+-            $paragraphAlignment = new ParagraphAlignment($styles['alignment']);
+-            $xmlWriter->startElement($paragraphAlignment->getName());
+-            foreach ($paragraphAlignment->getAttributes() as $attributeName => $attributeValue) {
+-                $xmlWriter->writeAttribute($attributeName, $attributeValue);
+-            }
+             $xmlWriter->endElement();
+         }
+ 
+-        //Right to left
+-        $xmlWriter->writeElementIf($styles['bidi'] === true, 'w:bidi');
+-
+-        //Paragraph contextualSpacing
+-        $xmlWriter->writeElementIf($styles['contextualSpacing'] === true, 'w:contextualSpacing');
++        // Shading
++        $this->writeChildStyle($xmlWriter, 'Shading', $styles['shading']);
+ 
+-        //Paragraph textAlignment
+-        $xmlWriter->writeElementIf($styles['textAlignment'] !== null, 'w:textAlignment', 'w:val', $styles['textAlignment']);
++        // Tabs
++        $this->writeTabs($xmlWriter, $styles['tabs']);
+ 
+         // Hyphenation
+         $xmlWriter->writeElementIf($styles['suppressAutoHyphens'] === true, 'w:suppressAutoHyphens');
+ 
+-        // Child style: alignment, indentation, spacing, and shading
+-        $this->writeChildStyle($xmlWriter, 'Indentation', $styles['indentation']);
++        // Right to left
++        $xmlWriter->writeElementIf($styles['bidi'] === true, 'w:bidi');
++
++        // Spacing
+         $this->writeChildStyle($xmlWriter, 'Spacing', $styles['spacing']);
+-        $this->writeChildStyle($xmlWriter, 'Shading', $styles['shading']);
+ 
+-        // Tabs
+-        $this->writeTabs($xmlWriter, $styles['tabs']);
++        // Indentation
++        $this->writeIndentation($xmlWriter, $styles['indentation']);
+ 
+-        // Numbering
+-        $this->writeNumbering($xmlWriter, $styles['numbering']);
++        //Paragraph contextualSpacing
++        $xmlWriter->writeElementIf($styles['contextualSpacing'] === true, 'w:contextualSpacing');
+ 
+-        // Border
+-        if ($style->hasBorder()) {
+-            $xmlWriter->startElement('w:pBdr');
++        // Paragraph alignment
++        if ('' !== $styles['alignment']) {
++            $paragraphAlignment = new ParagraphAlignment($styles['alignment']);
++            $xmlWriter->startElement($paragraphAlignment->getName());
++            foreach ($paragraphAlignment->getAttributes() as $attributeName => $attributeValue) {
++                $xmlWriter->writeAttribute($attributeName, $attributeValue);
++            }
++            $xmlWriter->endElement();
++        }
+ 
+-            $styleWriter = new MarginBorder($xmlWriter);
+-            $styleWriter->setSizes($style->getBorderSize());
+-            $styleWriter->setStyles($style->getBorderStyle());
+-            $styleWriter->setColors($style->getBorderColor());
+-            $styleWriter->write();
++        //Paragraph textAlignment
++        $xmlWriter->writeElementIf($styles['textAlignment'] !== null, 'w:textAlignment', 'w:val', $styles['textAlignment']);
+ 
+-            $xmlWriter->endElement();
++        // Outline level
++        if ($this->outlineLevel !== null) {
++            $outlineLevel = $this->outlineLevel;
+         }
++        $xmlWriter->writeElementIf($outlineLevel !== null, 'w:outlineLvl', 'w:val', $outlineLevel);
+ 
+         if (!$this->withoutPPR) {
+             $xmlWriter->endElement(); // w:pPr
+@@ -150,8 +202,14 @@ class Paragraph extends AbstractStyle
+      *
+      * @param Style\Tab[] $tabs
+      */
+-    private function writeTabs(XMLWriter $xmlWriter, $tabs): void
++    private function writeTabs(XMLWriter $xmlWriter, $tabs = []): void
+     {
++        if (isset($this->children['tabs'])) {
++            call_user_func($this->children['tabs']);
++
++            return;
++        }
++
+         if (!empty($tabs)) {
+             $xmlWriter->startElement('w:tabs');
+             foreach ($tabs as $tab) {
+@@ -162,32 +220,70 @@ class Paragraph extends AbstractStyle
+         }
+     }
+ 
++    /**
++     * Write indentation.
++     *
++     * @param null|Style\Indentation $indentation
++     */
++    private function writeIndentation(XMLWriter $xmlWriter, $indentation = null): void
++    {
++        if (isset($this->children['ind'])) {
++            call_user_func($this->children['ind']);
++
++            return;
++        }
++
++        $this->writeChildStyle($xmlWriter, 'Indentation', $indentation);
++    }
++
+     /**
+      * Write numbering.
+      *
+-     * @param array $numbering
++     * @param null|array $numbering
++     *
++     * @return null|int the outline level the numbering implies, if any
+      */
+-    private function writeNumbering(XMLWriter $xmlWriter, $numbering): void
++    private function writeNumbering(XMLWriter $xmlWriter, $numbering = null): ?int
+     {
+-        $numStyle = $numbering['style'];
+-        $numLevel = $numbering['level'];
++        $numStyle = null;
++        $numLevel = null;
++        $numberingStyle = null;
+ 
+-        /** @var Style\Numbering $numbering */
+-        $numbering = Style::getStyle($numStyle);
+-        if ($numStyle !== null && $numbering !== null) {
++        if ($numbering !== null) {
++            $numStyle = $numbering['style'];
++            $numLevel = $numbering['level'];
++
++            /** @var Style\Numbering $numberingStyle */
++            $numberingStyle = Style::getStyle($numStyle);
++        }
++
++        $hasNumbering = (null !== $numStyle && null !== $numberingStyle);
++
++        if (isset($this->children['numPr'])) {
++            // The numbering of the caller replaces the one of the style, but the
++            // outline level the style implies is written all the same, because it
++            // is a property of the paragraph and not of the numbering.
++            call_user_func($this->children['numPr']);
++        } elseif ($hasNumbering) {
+             $xmlWriter->startElement('w:numPr');
+-            $xmlWriter->startElement('w:numId');
+-            $xmlWriter->writeAttribute('w:val', $numbering->getIndex());
+-            $xmlWriter->endElement(); // w:numId
+             $xmlWriter->startElement('w:ilvl');
+             $xmlWriter->writeAttribute('w:val', $numLevel);
+             $xmlWriter->endElement(); // w:ilvl
++            $xmlWriter->startElement('w:numId');
++            $xmlWriter->writeAttribute('w:val', $numberingStyle->getIndex());
++            $xmlWriter->endElement(); // w:numId
+             $xmlWriter->endElement(); // w:numPr
+-
+-            $xmlWriter->startElement('w:outlineLvl');
+-            $xmlWriter->writeAttribute('w:val', $numLevel);
+-            $xmlWriter->endElement(); // w:outlineLvl
+         }
++
++        return $hasNumbering ? $numLevel : null;
++    }
++
++    /**
++     * Set the outline level of a heading style.
++     */
++    public function setOutlineLevel(?int $value): void
++    {
++        $this->outlineLevel = $value;
+     }
+ 
+     /**
+@@ -200,6 +296,34 @@ class Paragraph extends AbstractStyle
+         $this->withoutPPR = $value;
+     }
+ 
++    /**
++     * Write a child of w:pPr in place of the one in the style.
++     *
++     * A writer that writes part of a w:pPr hands its part to the paragraph style
++     * writer, which writes it where the schema names it. The two then agree on the
++     * order, because there is only one order.
++     *
++     * Only `numPr`, `tabs` and `ind` can be handed over; a writer that hands over
++     * any other child would have its part dropped, and a writer that is not told
++     * about a child writes the one of the style.
++     *
++     * @param string $name The name of the element, as the schema names it
++     * @param callable $writer Writes the element
++     */
++    public function setChild(string $name, callable $writer): void
++    {
++        if (!in_array($name, self::HANDED_OVER_CHILDREN, true)) {
++            throw new InvalidArgumentException(sprintf(
++                'The child "%s" of w:pPr cannot be handed over to the paragraph style writer;'
++                    . ' only "%s" can.',
++                $name,
++                implode('", "', self::HANDED_OVER_CHILDREN)
++            ));
++        }
++
++        $this->children[$name] = $writer;
++    }
++
+     /**
+      * Set is inline.
+      *
+diff --git a/src/PhpWord/Writer/Word2007/Style/Row.php b/src/PhpWord/Writer/Word2007/Style/Row.php
+index 2b9d804f3..cf4a1ebb5 100644
+--- a/src/PhpWord/Writer/Word2007/Style/Row.php
++++ b/src/PhpWord/Writer/Word2007/Style/Row.php
+@@ -49,8 +49,11 @@ class Row extends AbstractStyle
+             $xmlWriter->writeAttribute('w:hRule', ($style->isExactHeight() ? 'exact' : 'atLeast'));
+             $xmlWriter->endElement();
+         }
+-        $xmlWriter->writeElementIf($style->isTblHeader(), 'w:tblHeader', 'w:val', '1');
+-        $xmlWriter->writeElementIf($style->isCantSplit(), 'w:cantSplit', 'w:val', '1');
++        // The SDK reads the value of `w:tblHeader` and of `w:cantSplit` as an
++        // enumeration of `on` and `off` and refuses to read `1`, which the
++        // schema's `ST_OnOff` allows.
++        $xmlWriter->writeElementIf($style->isTblHeader(), 'w:tblHeader', 'w:val', 'on');
++        $xmlWriter->writeElementIf($style->isCantSplit(), 'w:cantSplit', 'w:val', 'on');
+ 
+         $xmlWriter->endElement(); // w:trPr
+     }
+diff --git a/src/PhpWord/Writer/Word2007/Style/Section.php b/src/PhpWord/Writer/Word2007/Style/Section.php
+index cb2c9a083..5c387b095 100644
+--- a/src/PhpWord/Writer/Word2007/Style/Section.php
++++ b/src/PhpWord/Writer/Word2007/Style/Section.php
+@@ -29,6 +29,12 @@ class Section extends AbstractStyle
+ {
+     /**
+      * Write style.
++     *
++     * The children of w:sectPr are a sequence in the schema and are only
++     * accepted in the order the schema names them, so the properties of the
++     * style are written in the order of `EG_SectPrContents`. The part that
++     * writes w:sectPr puts the footnote properties of the section before them
++     * and w:titlePg after them.
+      */
+     public function write(): void
+     {
+@@ -38,22 +44,20 @@ class Section extends AbstractStyle
+         }
+         $xmlWriter = $this->getXmlWriter();
+ 
+-        // Break type
+         $breakType = $style->getBreakType();
+         $xmlWriter->writeElementIf(null !== $breakType, 'w:type', 'w:val', $breakType);
+ 
+-        // Page size & orientation
++        // The size of a page is a number of twips, and the schema's `ST_TwipsMeasure`
++        // holds no fraction. The size of a sheet of paper in millimetres does not divide
++        // into twips exactly, so the value a page size carries is a fraction, and writing
++        // it as it stands writes a number the format has no way to read. It is rounded to
++        // the nearest twip here, which is as close as the format can get.
+         $xmlWriter->startElement('w:pgSz');
+         $xmlWriter->writeAttribute('w:orient', $style->getOrientation());
+-        $xmlWriter->writeAttribute('w:w', $style->getPageSizeW());
+-        $xmlWriter->writeAttribute('w:h', $style->getPageSizeH());
++        $xmlWriter->writeAttribute('w:w', (int) round($style->getPageSizeW()));
++        $xmlWriter->writeAttribute('w:h', (int) round($style->getPageSizeH()));
+         $xmlWriter->endElement(); // w:pgSz
+ 
+-        // Vertical alignment
+-        $vAlign = $style->getVAlign();
+-        $xmlWriter->writeElementIf(null !== $vAlign, 'w:vAlign', 'w:val', $vAlign);
+-
+-        // Margins
+         $margins = [
+             'w:top' => ['getMarginTop', SectionStyle::DEFAULT_MARGIN],
+             'w:right' => ['getMarginRight', SectionStyle::DEFAULT_MARGIN],
+@@ -70,7 +74,6 @@ class Section extends AbstractStyle
+         }
+         $xmlWriter->endElement();
+ 
+-        // Borders
+         if ($style->hasBorder()) {
+             $xmlWriter->startElement('w:pgBorders');
+             $xmlWriter->writeAttribute('w:offsetFrom', 'page');
+@@ -84,19 +87,19 @@ class Section extends AbstractStyle
+             $xmlWriter->endElement();
+         }
+ 
+-        // Columns
++        $styleWriter = new LineNumbering($xmlWriter, $style->getLineNumbering());
++        $styleWriter->write();
++
++        $pageNum = $style->getPageNumberingStart();
++        $xmlWriter->writeElementIf(null !== $pageNum, 'w:pgNumType', 'w:start', $pageNum);
++
+         $colsSpace = $style->getColsSpace();
+         $xmlWriter->startElement('w:cols');
+         $xmlWriter->writeAttribute('w:num', $style->getColsNum());
+         $xmlWriter->writeAttribute('w:space', $this->convertTwip($colsSpace, SectionStyle::DEFAULT_COLUMN_SPACING));
+         $xmlWriter->endElement();
+ 
+-        // Page numbering start
+-        $pageNum = $style->getPageNumberingStart();
+-        $xmlWriter->writeElementIf(null !== $pageNum, 'w:pgNumType', 'w:start', $pageNum);
+-
+-        // Line numbering
+-        $styleWriter = new LineNumbering($xmlWriter, $style->getLineNumbering());
+-        $styleWriter->write();
++        $vAlign = $style->getVAlign();
++        $xmlWriter->writeElementIf(null !== $vAlign, 'w:vAlign', 'w:val', $vAlign);
+     }
+ }
+diff --git a/src/PhpWord/Writer/Word2007/Style/Table.php b/src/PhpWord/Writer/Word2007/Style/Table.php
+index 446fc3b1a..32fd237f8 100644
+--- a/src/PhpWord/Writer/Word2007/Style/Table.php
++++ b/src/PhpWord/Writer/Word2007/Style/Table.php
+@@ -35,6 +35,17 @@ class Table extends AbstractStyle
+      */
+     private $width;
+ 
++    /**
++     * Whether the properties belong to a table in a document or to a table style.
++     *
++     * The two are written by the same writer and they are not the same thing.
++     * `CT_Tbl` is `tblPr, tblGrid, rows` and has room for the properties of the
++     * table alone, while `CT_Style` has a `w:tcPr` and a `w:tblStylePr` of its own.
++     *
++     * @var bool
++     */
++    private $isInline = false;
++
+     /**
+      * Write style.
+      */
+@@ -65,6 +76,27 @@ class Table extends AbstractStyle
+         // w:tblPr
+         $xmlWriter->startElement('w:tblPr');
+ 
++        // The children of `w:tblPr` come in the order the schema names them. The
++        // schema names them in a sequence and not in a set, so a reader that walks
++        // the sequence stops at the first child it did not expect: `w:tblpPr`
++        // belongs before `w:tblW`, `w:bidiVisual` belongs before `w:jc`, `w:shd`
++        // belongs between `w:tblBorders` and `w:tblLayout`, and `w:tblBorders`
++        // belongs before `w:tblLayout`. A table whose properties are written in
++        // any other order is a table such a reader cannot read.
++        //
++        // The order below is the one in ECMA-376, in `CT_TblPrBase`.
++
++        // Position
++        $styleWriter = new TablePosition($xmlWriter, $style->getPosition());
++        $styleWriter->write();
++
++        //Right to left
++        // The SDK reads the value of `w:bidiVisual` as an enumeration of `on` and
++        // `off` and refuses to read `1`, which the schema's `ST_OnOff` allows.
++        $xmlWriter->writeElementIf($style->isBidiVisual() !== null, 'w:bidiVisual', 'w:val', $style->isBidiVisual() ? 'on' : 'off');
++
++        $this->writeTblWidth($xmlWriter, 'w:tblW', $style->getUnit(), $style->getWidth());
++
+         // Table alignment
+         if ('' !== $style->getAlignment()) {
+             $tableAlignment = new TableAlignment($style->getAlignment());
+@@ -75,26 +107,37 @@ class Table extends AbstractStyle
+             $xmlWriter->endElement();
+         }
+ 
+-        $this->writeTblWidth($xmlWriter, 'w:tblW', $style->getUnit(), $style->getWidth());
+         $this->writeTblWidth($xmlWriter, 'w:tblCellSpacing', TblWidth::TWIP, $style->getCellSpacing());
+         $this->writeIndent($xmlWriter, $style);
+-        $this->writeLayout($xmlWriter, $style->getLayout());
+-
+-        // Position
+-        $styleWriter = new TablePosition($xmlWriter, $style->getPosition());
+-        $styleWriter->write();
++        $this->writeBorder($xmlWriter, $style);
+ 
+-        //Right to left
+-        $xmlWriter->writeElementIf($style->isBidiVisual() !== null, 'w:bidiVisual', 'w:val', $this->writeOnOf($style->isBidiVisual()));
++        if ($this->isInline) {
++            // The shading of a table is the shading of the table, and the table's
++            // properties are where the schema names it: `w:shd` is a child of
++            // `w:tblPr`, and `w:tblPr` is a child of `w:tbl`.
++            $this->writeShading($xmlWriter, $style);
++        }
+ 
++        $this->writeLayout($xmlWriter, $style->getLayout());
+         $this->writeMargin($xmlWriter, $style);
+-        $this->writeBorder($xmlWriter, $style);
+ 
+         $xmlWriter->endElement(); // w:tblPr
+ 
++        if ($this->isInline) {
++            // A table in a document has the grid and the rows after its
++            // properties and nothing else: `CT_Tbl` names no `w:tcPr` and no
++            // `w:tblStylePr`, and a reader that walks it stops at the first child
++            // it did not expect.
++            return;
++        }
++
++        // The cells of a table style, and the first row of it. The shading of a
++        // table style is the shading of its cells, which is where it was and
++        // where a reader looks for it.
++        $xmlWriter->startElement('w:tcPr');
+         $this->writeShading($xmlWriter, $style);
++        $xmlWriter->endElement(); // w:tcPr
+ 
+-        // First row style
+         $firstRow = $style->getFirstRow();
+         if ($firstRow instanceof TableStyle) {
+             $this->writeFirstRow($xmlWriter, $firstRow);
+@@ -129,20 +172,32 @@ class Table extends AbstractStyle
+         }
+     }
+ 
++    /**
++     * Set whether the properties belong to a table in a document.
++     *
++     * @param bool $value
++     */
++    public function setIsInline($value): void
++    {
++        $this->isInline = $value;
++    }
++
+     /**
+      * Write border.
++     *
++     * @param string $elementName w:tblBorders for a table, w:tcBorders for a cell
+      */
+-    private function writeBorder(XMLWriter $xmlWriter, TableStyle $style): void
++    private function writeBorder(XMLWriter $xmlWriter, TableStyle $style, $elementName = 'w:tblBorders'): void
+     {
+         if ($style->hasBorder()) {
+-            $xmlWriter->startElement('w:tblBorders');
++            $xmlWriter->startElement($elementName);
+ 
+             $styleWriter = new MarginBorder($xmlWriter);
+             $styleWriter->setSizes($style->getBorderSize());
+             $styleWriter->setColors($style->getBorderColor());
+             $styleWriter->write();
+ 
+-            $xmlWriter->endElement(); // w:tblBorders
++            $xmlWriter->endElement(); // w:tblBorders or w:tcBorders
+         }
+     }
+ 
+@@ -173,7 +228,7 @@ class Table extends AbstractStyle
+         $xmlWriter->writeAttribute('w:type', 'firstRow');
+         $xmlWriter->startElement('w:tcPr');
+ 
+-        $this->writeBorder($xmlWriter, $style);
++        $this->writeBorder($xmlWriter, $style, 'w:tcBorders');
+         $this->writeShading($xmlWriter, $style);
+ 
+         $xmlWriter->endElement(); // w:tcPr
+@@ -182,16 +237,15 @@ class Table extends AbstractStyle
+ 
+     /**
+      * Write shading.
++     *
++     * The `w:shd` belongs to the properties of the table or of the cell, and the
++     * caller has opened them.
+      */
+     private function writeShading(XMLWriter $xmlWriter, TableStyle $style): void
+     {
+         if (null !== $style->getShading()) {
+-            $xmlWriter->startElement('w:tcPr');
+-
+             $styleWriter = new Shading($xmlWriter, $style->getShading());
+             $styleWriter->write();
+-
+-            $xmlWriter->endElement();
+         }
+     }
+ 
