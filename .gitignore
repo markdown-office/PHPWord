@@ -27,3 +27,7 @@ phpword.ini
 /.phpunit.result.cache
 /public
 tests/PhpWordTests/_files/tmp
+
+# Worktrees for a second checkout of this repository live here, so that one
+# /.worktrees/ rule covers every branch that needs one.
+/.worktrees/
